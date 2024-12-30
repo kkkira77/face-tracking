@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Face Detection Sketch</title>
+    <script src="https://cdn.jsdelivr.net/npm/p5@1.4.2/lib/p5.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/ml5js/Intro-ML-Arts-IMA@ml5-build-10-7-19/ml5_build/ml5.min.js"></script>
+</head>
+<body>
+    <script>
+    // Content from tab2.js
+    // (This part is now redundant as we're directly including ml5.js in the head)
+    // let s = document.createElement("script")
+    // s.type = "text/javascript"
+    // s.src = "https://cdn.jsdelivr.net/gh/ml5js/Intro-ML-Arts-IMA@ml5-build-10-7-19/ml5_build/ml5.min.js"
+    // document.head.appendChild(s)
+
+    // Content from mySketch.js
+    let faceapi;
+    let video, faceGraphic;
+    let detections;
+    let setBg = true;
+    let startGrid = false;
+
+    // by default all options are set to true
+    const detection_options = {
+      withLandmarks: true,
+      withDescriptors: false,
+    };
+
+    function setup() {
+      createCanvas(1920, 1080);
+
+      // load up your video
+      video = createCapture(VIDEO);
+      video.size(320, 240);
+
+      faceGraphic = createGraphics(width, height);
+      faceGraphic.translate(width, 0);
+      faceGraphic.scale(-1, 1);
+
+      faceapi = ml5.faceApi(video, detection_options, modelReady);
+      textAlign(RIGHT);
+      video.hide();
+    }
+
+    function modelReady() {
+      console.log("ready!");
+      console.log(faceapi);
+      faceapi.detect(gotResults);
+    }
+
+    function gotResults(err, result) {
+      if (err) {
+        console.log(err);
+        return;
+      }
+
+      detections = result;
+      background(0);
+
+      image(faceGraphic, 0, 0, width, height);
+      if (detections) {
+        if (detections.length > 0) {
+          copyFace(detections);
+        } else {
+          // If no face detected, just draw a grid square
+          gridX += gridL; // boxWidth
+
+          if (gridX >= width) {
+            gridX = 0;
+            gridY += gridL; // boxHeight;
+          }
+
+          if (gridY >= height) {
+            gridX = 0;
+            gridY = 0;
+          }
+
+          faceGraphic.noStroke();
+          faceGraphic.fill(240);
+          faceGraphic.rect(gridX, gridY, gridL, gridL);
+        }
+      }
+      faceapi.detect(gotResults);
+    }
+
+    let gridL = 80; // Base grid length
+    let gridX = 0; // Start at the left edge
+    let gridY = 0; // Start at the top edge
+
+    function copyFace(detections) {
+      if (mouseIsPressed) {
+        faceGraphic.clear(); // clear the trace of face
+        gridX = 0;
+        gridY = 0;
+      }
+
+      for (let i = 0; i < 1; i++) {
+        const alignedRect = detections[i].alignedRect;
+        const x = floor(alignedRect._box._x);
+        const y = floor(alignedRect._box._y);
+        const boxWidth = floor(alignedRect._box._width);
+        const boxHeight = floor(alignedRect._box._height);
+
+        // Determine random scale for the capture ratio
+        let scaleFactor = random(1, 4); // Random scale between 1x1 and 4x4
+        let scaledGridL = gridL * scaleFactor; // Calculate new size
+
+        // Update grid position based on the new scaled size
+        if (gridX + scaledGridL > width) {
+          gridX = 0; // Reset to left edge
+          gridY += scaledGridL; // Move down to the next row
+        }
+
+        if (gridY + scaledGridL > height) {
+          gridX = 0; // Reset to left edge
+          gridY = 0; // Reset to top edge
+        }
+
+        // Capture the video feed section with scaling
+        let faceCapture = video.get(x, y, boxWidth, boxHeight);
+        
+        // Apply the dithering before the thermal mapping
+        ditherImage(faceCapture); // Apply dithering effect
+        thermalMap(faceCapture); // Apply the thermal mapping
+
+        faceGraphic.image(faceCapture, gridX, gridY, scaledGridL, scaledGridL);
+
+        // Update grid position for the next capture
+        gridX += scaledGridL; // Move to the right for the next capture
+      }
+    }
+
+    // Function to map grayscale to thermal colors
+    function thermalMap(img) {
+      img.loadPixels();
+      for (let y = 0; y < img.height; y++) {
+        for (let x = 0; x < img.width; x++) {
+          let index = (x + y * img.width) * 4;
+          let r = img.pixels[index];
+          let g = img.pixels[index + 1];
+          let b = img.pixels[index + 2];
+          let brightness = (r + g + b) / 3; // Calculate brightness
+          
+          // Map brightness to thermal colors
+          let color = getThermalColor(brightness);
+          img.pixels[index] = color[0];
+          img.pixels[index + 1] = color[1];
+          img.pixels[index + 2] = color[2];
+        }
+      }
+      img.updatePixels();
+    }
+
+    // Function to return thermal color based on brightness
+    function getThermalColor(value) {
+      // If brightness is low, return black
+      if (value < 20) {
+        return [0, 0, 0]; // Black color for low brightness
+      }
+
+      // Otherwise, map brightness to thermal colors
+      let red = map(value, 20, 255, 0, 255);
+      let green = map(value, 20, 255, 0, 100);
+      let blue = map(value, 20, 255, 255, 0);
+      
+      return [red, green, blue];
+    }
+
+    function ditherImage(img) {
+      img.loadPixels();
+      for (let y = 0; y < img.height; y++) {
+        for (let x = 0; x < img.width; x++) {
+          let index = (x + y * img.width) * 4;
+          let oldR = img.pixels[index];
+          let newR = oldR < 128 ? 0 : 255;
+          let quantError = oldR - newR;
+
+          img.pixels[index] = newR;
+          distributeError(img, x, y, quantError);
+        }
+      }
+      img.updatePixels();
+    }
+
+    function distributeError(img, x, y, quantError) {
+      let width = img.width;
+      let height = img.height;
+
+      // Error distribution based on Floyd-Steinberg dithering
+      if (x + 1 < width) adjustPixel(img, x + 1, y, quantError * 7 / 16);
+      if (x - 1 >= 0 && y + 1 < height) adjustPixel(img, x - 1, y + 1, quantError * 3 / 16);
+      if (y + 1 < height) adjustPixel(img, x, y + 1, quantError * 5 / 16);
+      if (x + 1 < width && y + 1 < height) adjustPixel(img, x + 1, y + 1, quantError * 1 / 16);
+    }
+
+    function adjustPixel(img, x, y, error) {
+      let index = (x + y * img.width) * 4;
+      img.pixels[index] += error;
+    }
+
+    function keyTyped() {
+      saveCanvas("myCanvas", "png");
+      return false;
+    }
+
+    function drawLandmarks(detections) {
+      noFill();
+      stroke(161, 95, 251);
+      strokeWeight(2);
+
+      for (let i = 0; i < detections.length; i++) {
+        const mouth = detections[i].parts.mouth;
+        const nose = detections[i].parts.nose;
+        const leftEye = detections[i].parts.leftEye;
+        const rightEye = detections[i].parts.rightEye;
+        const rightEyeBrow = detections[i].parts.rightEyeBrow;
+        const leftEyeBrow = detections[i].parts.leftEyeBrow;
+
+        drawPart(mouth, true);
+        drawPart(nose, false);
+        drawPart(leftEye, true);
+        drawPart(leftEyeBrow, false);
+        drawPart(rightEye, true);
+        drawPart(rightEyeBrow, false);
+      }
+    }
+
+    function drawPart(feature, closed) {
+      beginShape();
+      for (let i = 0; i < feature.length; i++) {
+        const x = feature[i]._x;
+        const y = feature[i]._y;
+        vertex(x, y);
+      }
+
+      if (closed === true) {
+        endShape(CLOSE);
+      } else {
+        endShape();
+      }
+    }
+    </script>
+</body>
+</html>
